@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "msgspec_to_pyspark_schema"
+version = "0.0.1"
+authors = [
+  {name = "Milan Kundra", email = "kundra.milan@fr.sika.com"},
+]
+dependencies = [
+    "msgspec>=0.21.1",
+    "pyspark>=4.1.0"
+]
+description = "Package containing utility function to convert msgspec Structs into PySpark schemas."
+readme = "README.md"
+requires-python = ">=3.11"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+[tool.hatch.metadata]
+allow-direct-references=true
+
+# [project.urls]
+# Homepage = "https://github.com/SikaSIS/hybrid-rag"
+# Issues = "https://github.com/SikaSIS/hybrid-rag/issues"
+
