@@ -1,0 +1,13 @@
+class MSGSpecToPySparkException(Exception):
+    ...
+
+class MSGSpecToPySparkValueError(MSGSpecToPySparkException, ValueError):
+    ...
+
+
+class MSGSpecToPySparkTypeError(MSGSpecToPySparkException, TypeError):
+    ...
+
+
+class MSGSpecToPySparkNotImplementedError(MSGSpecToPySparkException, NotImplementedError):
+    ...
