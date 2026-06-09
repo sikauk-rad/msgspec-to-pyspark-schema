@@ -9,7 +9,7 @@ from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import types as sqltypes
 
 from .constants import MSGSPEC_TYPE_TO_SPARK_MAP
-from .datatypes import PySparkSchemaType
+from .datatypes import PySparkSchemaType, MSGSpecToPySparkSchemaConfig
 from .exceptions import (
     MSGSpecToPySparkValueError, 
     MSGSpecToPySparkTypeError, 
@@ -21,12 +21,7 @@ from .utilities import struct_to_dict
 def convert_msgspec_struct_to_pyspark_schema(
     struct: type[Struct],
     *,
-    integer_type: sqltypes.IntegerType | sqltypes.LongType = sqltypes.IntegerType(),
-    float_type: sqltypes.FloatType | sqltypes.DoubleType = sqltypes.FloatType(),
-    default_decimal_precision: int = 38,
-    default_decimal_scale: int = 18,
-    any_to_string: bool = False,
-    nonimplemented_to_string: bool = False,
+    config: MSGSpecToPySparkSchemaConfig = MSGSpecToPySparkSchemaConfig(),
 ) -> sqltypes.StructType:
 
     """
@@ -51,12 +46,7 @@ def convert_msgspec_struct_to_pyspark_schema(
     return make_spark_structtype_from_msgspec(
         struct_type = type_info, 
         ids_seen = ids_seen,
-        integer_type = integer_type,
-        float_type = float_type,
-        default_decimal_precision = default_decimal_precision,
-        default_decimal_scale = default_decimal_scale,
-        any_to_string = any_to_string,
-        nonimplemented_to_string = nonimplemented_to_string,
+        config = config,
     )
 
 
@@ -64,12 +54,7 @@ def make_spark_structtype_from_msgspec(
     struct_type: msginspect.StructType,
     ids_seen: set[int],
     *,
-    integer_type: sqltypes.IntegerType | sqltypes.LongType = sqltypes.IntegerType(),
-    float_type: sqltypes.FloatType | sqltypes.DoubleType = sqltypes.FloatType(),
-    default_decimal_precision: int = 38,
-    default_decimal_scale: int = 18,
-    any_to_string: bool = False,
-    nonimplemented_to_string: bool = False,
+    config: MSGSpecToPySparkSchemaConfig = MSGSpecToPySparkSchemaConfig(),
 ) -> sqltypes.StructType:
 
     if (struct_type_id := id(struct_type)) in ids_seen:
@@ -90,12 +75,7 @@ def make_spark_structtype_from_msgspec(
         spark_type, type_allows_none = make_spark_datatype_from_msgspec(
             msgspec_type = msgspec_type, 
             ids_seen = ids_seen,
-            integer_type = integer_type,
-            float_type = float_type,
-            default_decimal_precision = default_decimal_precision,
-            default_decimal_scale = default_decimal_scale,
-            any_to_string = any_to_string,
-            nonimplemented_to_string = nonimplemented_to_string,
+            config = config,
         )
 
         # nullable if either:
@@ -117,13 +97,7 @@ def make_spark_structtype_from_msgspec(
 def make_spark_datatype_from_msgspec(
     msgspec_type: msginspect.Type,
     ids_seen: set[int],
-    *,
-    integer_type: sqltypes.IntegerType | sqltypes.LongType = sqltypes.IntegerType(),
-    float_type: sqltypes.FloatType | sqltypes.DoubleType = sqltypes.FloatType(),
-    default_decimal_precision: int = 38,
-    default_decimal_scale: int = 18,
-    any_to_string: bool = False,
-    nonimplemented_to_string: bool = False,
+    config: MSGSpecToPySparkSchemaConfig = MSGSpecToPySparkSchemaConfig(),
 ) -> tuple[sqltypes.DataType, bool]:
 
     """
@@ -133,12 +107,7 @@ def make_spark_datatype_from_msgspec(
 
     make_kwargs = dict(
         ids_seen = ids_seen,
-        integer_type = integer_type,
-        float_type = float_type,
-        default_decimal_precision = default_decimal_precision,
-        default_decimal_scale = default_decimal_scale,
-        any_to_string = any_to_string,
-        nonimplemented_to_string = nonimplemented_to_string,
+        config = config,
     )
 
     make_spark_datatype = partial(
@@ -172,11 +141,11 @@ def make_spark_datatype_from_msgspec(
 
 
     elif isinstance(msgspec_type, msginspect.IntType):
-        return integer_type, False
+        return config.integer_type, False
 
 
     elif isinstance(msgspec_type, msginspect.FloatType):
-        return float_type, False
+        return config.float_type, False
 
 
     elif (spark_datatype := MSGSPEC_TYPE_TO_SPARK_MAP.get(type(msgspec_type), None)):
@@ -184,8 +153,8 @@ def make_spark_datatype_from_msgspec(
 
 
     elif isinstance(msgspec_type, msginspect.DecimalType):
-        precision = getattr(msgspec_type, "precision", default_decimal_precision)
-        scale = getattr(msgspec_type, "scale", default_decimal_scale)
+        precision = getattr(msgspec_type, "precision", config.default_decimal_precision)
+        scale = getattr(msgspec_type, "scale", config.default_decimal_scale)
         return sqltypes.DecimalType(
             precision = precision, 
             scale = scale,
@@ -274,12 +243,12 @@ def make_spark_datatype_from_msgspec(
 
 
     elif isinstance(msgspec_type, msginspect.AnyType):
-        if any_to_string:
+        if config.any_to_string:
             return sqltypes.StringType(), True
         else:
             raise MSGSpecToPySparkTypeError('`Any` type not supported.')
 
-    elif nonimplemented_to_string:
+    elif config.nonimplemented_to_string:
         return sqltypes.StringType(), True
     
     else:
@@ -290,12 +259,7 @@ def convert_msgspec_structs_to_pyspark_df[T: Struct](
     structs: Sequence[T],
     schema: PySparkSchemaType | None = None,
     *,
-    integer_type: sqltypes.IntegerType | sqltypes.LongType = sqltypes.IntegerType(),
-    float_type: sqltypes.FloatType | sqltypes.DoubleType = sqltypes.FloatType(),
-    default_decimal_precision: int = 38,
-    default_decimal_scale: int = 18,
-    any_to_string: bool = True,
-    nonimplemented_to_string: bool = True,
+    config: MSGSpecToPySparkSchemaConfig = MSGSpecToPySparkSchemaConfig(),
     verify_types: bool = False,
     spark_session: SparkSession | None = None,
 ) -> DataFrame:
@@ -324,12 +288,7 @@ def convert_msgspec_structs_to_pyspark_df[T: Struct](
         struct_type = next(iter(all_types))
         schema = convert_msgspec_struct_to_pyspark_schema(
             struct = struct_type,
-            integer_type = integer_type,
-            float_type = float_type,
-            default_decimal_precision = default_decimal_precision,
-            default_decimal_scale = default_decimal_scale,
-            any_to_string = any_to_string,
-            nonimplemented_to_string = nonimplemented_to_string,
+            config = config,
         )
 
     return spark.createDataFrame(
