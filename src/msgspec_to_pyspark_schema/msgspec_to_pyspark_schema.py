@@ -86,14 +86,14 @@ def convert_msgspec_struct_type_to_pyspark_schema(
 
     # Track recursion to avoid infinite loops on self-referential types.
     ids_seen: set[int] = set()
-    return make_spark_structtype_from_msgspec(
+    return make_spark_struct_from_msgspec_struct_type(
         struct_type = type_info, 
         ids_seen = ids_seen,
         config = config,
     )
 
 
-def make_spark_structtype_from_msgspec(
+def make_spark_struct_from_msgspec_struct_type(
     struct_type: msginspect.StructType,
     ids_seen: set[int],
     *,
@@ -134,7 +134,7 @@ def make_spark_structtype_from_msgspec(
 
     Notes
     -----
-    Each field is converted using ``make_spark_datatype_from_msgspec``.
+    Each field is converted using ``make_spark_datatype_from_msgspec_type``.
     A field is marked nullable if either:
 
     - the field is not required
@@ -143,7 +143,7 @@ def make_spark_structtype_from_msgspec(
     Examples
     --------
     >>> type_info = msginspect.type_info(MyStruct)
-    >>> make_spark_structtype_from_msgspec(type_info, ids_seen=set())
+    >>> make_spark_struct_from_msgspec_struct_type(type_info, ids_seen=set())
     StructType([...])
     """
 
@@ -163,7 +163,7 @@ def make_spark_structtype_from_msgspec(
             'type',
             'required',
         )(struct_field)
-        spark_type, type_allows_none = make_spark_datatype_from_msgspec(
+        spark_type, type_allows_none = make_spark_datatype_from_msgspec_type(
             msgspec_type = msgspec_type, 
             ids_seen = ids_seen,
             config = config,
@@ -185,7 +185,7 @@ def make_spark_structtype_from_msgspec(
     return sqltypes.StructType(spark_fields)
 
 
-def make_spark_datatype_from_msgspec(
+def make_spark_datatype_from_msgspec_type(
     msgspec_type: msginspect.Type,
     ids_seen: set[int],
     config: MSGSpecToPySparkSchemaConfig = MSGSpecToPySparkSchemaConfig(),
@@ -250,11 +250,11 @@ def make_spark_datatype_from_msgspec(
     Examples
     --------
     >>> t = msginspect.type_info(int | None)
-    >>> make_spark_datatype_from_msgspec(t, ids_seen=set())
+    >>> make_spark_datatype_from_msgspec_type(t, ids_seen=set())
     (IntegerType(), True)
 
     >>> t = msginspect.type_info(list[str])
-    >>> make_spark_datatype_from_msgspec(t, ids_seen=set())
+    >>> make_spark_datatype_from_msgspec_type(t, ids_seen=set())
     (ArrayType(StringType(), containsNull=False), False)
     """
 
@@ -264,7 +264,7 @@ def make_spark_datatype_from_msgspec(
     )
 
     make_spark_datatype = partial(
-        make_spark_datatype_from_msgspec,
+        make_spark_datatype_from_msgspec_type,
         **make_kwargs,
     )
 
@@ -365,7 +365,7 @@ def make_spark_datatype_from_msgspec(
 
 
     elif isinstance(msgspec_type, msginspect.StructType):
-        return make_spark_structtype_from_msgspec(
+        return make_spark_struct_from_msgspec_struct_type(
             struct_type = msgspec_type, 
             **make_kwargs,
         ), False
@@ -503,7 +503,7 @@ def convert_msgspec_structs_to_pyspark_df[T: Struct](
                     f'struct types within structs are not consistent: {all_types}.'
                 )
         struct_type = next(iter(all_types))
-        schema = convert_msgspec_struct_to_pyspark_schema(
+        schema = convert_msgspec_struct_type_to_pyspark_schema(
             struct = struct_type,
             config = config,
         )
