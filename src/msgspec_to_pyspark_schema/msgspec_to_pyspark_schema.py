@@ -347,8 +347,8 @@ def make_spark_datatype_from_msgspec_type(
 
     elif isinstance(msgspec_type, msginspect.TupleType):
         item_types = getattr(msgspec_type, 'item_types', None)
-        if not item_types:
-            raise MSGSpecToPySparkTypeError(f'Untyped tuple field {msgspec_type!r}.') 
+        # if not item_types:
+            # raise MSGSpecToPySparkTypeError(f'Untyped tuple field {msgspec_type!r}.') 
         spark_fields: list[sqltypes.StructField] = []
         for n, element_type in enumerate(item_types, start=1):
             element_spark_datatype, element_nullability = make_spark_datatype(
