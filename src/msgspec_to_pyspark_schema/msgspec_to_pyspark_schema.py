@@ -386,8 +386,7 @@ def make_spark_datatype_from_msgspec_type(
         elif value_types <= {int}:
             return sqltypes.IntegerType(), nullable
         else:
-            max_len = max(map(len, map(str, msgspec_type.values)))
-            return sqltypes.VarcharType(max_len), nullable
+            return sqltypes.StringType(), nullable
 
 
     elif isinstance(msgspec_type, msginspect.EnumType):
