@@ -5,7 +5,7 @@ from pyspark.sql import types as sqltypes
 
 type PySparkSchemaType = sqltypes.AtomicType | sqltypes.StructType | str | Sequence[str]
 
-class MSGSpecToPySparkSchemaConfig(Struct):
+class MSGSpecToPySparkSchemaConfig(Struct, frozen = True, kw_only = True):
     integer_type: sqltypes.IntegerType | sqltypes.LongType = sqltypes.IntegerType()
     float_type: sqltypes.FloatType | sqltypes.DoubleType = sqltypes.FloatType()
     default_decimal_precision: int = 38
