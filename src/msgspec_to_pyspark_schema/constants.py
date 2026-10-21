@@ -8,10 +8,15 @@ MSGSPEC_TYPE_TO_SPARK_MAP = {
     msginspect.StrType: sqltypes.StringType(),
     msginspect.BytesType: sqltypes.BinaryType(),
     msginspect.ByteArrayType: sqltypes.BinaryType(),
-    msginspect.NoneType: sqltypes.NullType(),
     msginspect.UUIDType: sqltypes.StringType(),
     msginspect.DateType: sqltypes.DateType(),
-    msginspect.DateTimeType: sqltypes.TimestampType(),
     msginspect.TimeType: sqltypes.TimeType(),
     msginspect.TimeDeltaType: sqltypes.DayTimeIntervalType(),
 }
+
+RECORD_TYPES = (
+    msginspect.StructType,
+    msginspect.DataclassType,
+    msginspect.TypedDictType,
+    msginspect.NamedTupleType,
+)

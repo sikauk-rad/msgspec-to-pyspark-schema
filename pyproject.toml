@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "msgspec_to_pyspark_schema"
-version = "0.1.0"
+version = "0.3.0"
 authors = [
   {name = "Milan Kundra", email = "kundra.milan@fr.sika.com"},
 ]
@@ -14,7 +14,7 @@ dependencies = [
 ]
 description = "Package containing utility function to convert msgspec Structs into PySpark schemas."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
@@ -26,3 +26,16 @@ allow-direct-references=true
 
 [project.urls]
 Homepage = "https://github.com/sikauk-rad/msgspec_to_pyspark_schema"
+
+
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "spark: tests requiring a local Spark session (and therefore a Java runtime)",
+]

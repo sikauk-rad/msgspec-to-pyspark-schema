@@ -8,8 +8,8 @@ import msgspec.inspect as msginspect
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import types as sqltypes
 
-from .constants import MSGSPEC_TYPE_TO_SPARK_MAP
-from .datatypes import PySparkSchemaType, MSGSpecToPySparkSchemaConfig
+from .constants import MSGSPEC_TYPE_TO_SPARK_MAP, RECORD_TYPES
+from .datatypes import MSGSpecToPySparkSchemaConfig, MakeKwargs
 from .exceptions import (
     MSGSpecToPySparkValueError, 
     MSGSpecToPySparkTypeError, 
@@ -51,7 +51,10 @@ def convert_msgspec_struct_type_to_pyspark_schema(
     Raises
     ------
     MSGSpecToPySparkTypeError
-        If the inspected object is not a ``msgspec.inspect.StructType``.
+        If the inspected object is not a ``msgspec.inspect.StructType``, or if the 
+        struct contains a type Spark cannot represent (e.g., a recursive type, a union 
+        other than ``T | None``, a map with nullable keys, or ``Any`` when 
+        ``config.any_to_string`` is disabled).
     MSGSpecToPySparkNotImplementedError
         If the struct contains a type that cannot be represented and no configured 
         fallback applies.
@@ -72,7 +75,7 @@ def convert_msgspec_struct_type_to_pyspark_schema(
     ...     city: str
     ...     postcode: str | None
     ...
-    >>> convert_msgspec_struct_to_pyspark_schema(Address)
+    >>> convert_msgspec_struct_type_to_pyspark_schema(Address)
     StructType([...])
     """
 
@@ -81,113 +84,83 @@ def convert_msgspec_struct_type_to_pyspark_schema(
 
     if not isinstance(type_info, msginspect.StructType):
         raise MSGSpecToPySparkTypeError(
-            f"Expected a msgspec StructType from inspection, got {type(type_info)!r}"
+            f"Expected a msgspec StructType from inspection, got {type(type_info)}"
         )
 
     # Track recursion to avoid infinite loops on self-referential types.
-    ids_seen: set[int] = set()
+    seen: set[type] = set()
     return make_spark_struct_from_msgspec_struct_type(
         struct_type = type_info, 
-        ids_seen = ids_seen,
+        seen = seen,
         config = config,
     )
 
 
 def make_spark_struct_from_msgspec_struct_type(
-    struct_type: msginspect.StructType,
-    ids_seen: set[int],
-    *,
-    config: MSGSpecToPySparkSchemaConfig = MSGSpecToPySparkSchemaConfig(),
+    struct_type: (
+        msginspect.StructType | msginspect.DataclassType 
+        |  
+        msginspect.TypedDictType | msginspect.NamedTupleType
+    ), 
+    seen: set[type], 
+    *, 
+    config: MSGSpecToPySparkSchemaConfig,
 ) -> sqltypes.StructType:
 
-
-    """
-    Build a PySpark ``StructType`` from a msgspec ``StructType``.
-
-    This is the recursive worker used to convert nested msgspec struct definitions into 
-    Spark schemas. It tracks previously visited type objects to detect recursion and 
-    prevent infinite loops when processing nested or self-referential types.
-
-    Parameters
-    ----------
-    struct_type : msgspec.inspect.StructType
-        The inspected msgspec struct type to convert.
-
-    ids_seen : set of int
-        A set of object ids for struct types currently being processed. This is used to 
-        detect recursive references during traversal.
-
-    config : MSGSpecToPySparkSchemaConfig, optional
-        Configuration controlling how individual field types are mapped to Spark SQL 
-        types.
-
-    Returns
-    -------
-    pyspark.sql.types.StructType
-        A Spark ``StructType`` composed of fields converted from the msgspec struct 
-        definition.
-
-    Raises
-    ------
-    MSGSpecToPySparkTypeError
-        If a recursive or self-referential type is encountered.
-
-    Notes
-    -----
-    Each field is converted using ``make_spark_datatype_from_msgspec_type``.
-    A field is marked nullable if either:
-
-    - the field is not required
-    - the field type itself allows ``None``
-
-    Examples
-    --------
-    >>> type_info = msginspect.type_info(MyStruct)
-    >>> make_spark_struct_from_msgspec_struct_type(type_info, ids_seen=set())
-    StructType([...])
-    """
-
-
-    if (struct_type_id := id(struct_type)) in ids_seen:
+    cls = struct_type.cls
+    if cls in seen:
         raise MSGSpecToPySparkTypeError(
-            "Recursive (self-referential) types are not representable as Spark schemas."
+            f"Recursive type {cls.__qualname__} is not representable as a Spark schema."
         )
     else:
-        ids_seen.add(struct_type_id)
+        seen.add(cls)
 
-    spark_fields: list[sqltypes.StructField] = []
+    try:
+        spark_fields: list[sqltypes.StructField] = []
 
-    for struct_field in struct_type.fields:
-        name, msgspec_type, required = op.attrgetter(
-            'encode_name',
-            'type',
-            'required',
-        )(struct_field)
-        spark_type, type_allows_none = make_spark_datatype_from_msgspec_type(
-            msgspec_type = msgspec_type, 
-            ids_seen = ids_seen,
-            config = config,
-        )
+        # Tagged structs: to_builtins emits the tag (first element if array_like).
+        # Only msgspec Structs carry `tag_field`; dataclasses, TypedDicts and 
+        # NamedTuples do not, hence the default.
+        if (
+            (tag_field := getattr(struct_type, 'tag_field', None)) is not None
+            and
+            (tag := getattr(struct_type, 'tag', None)) is not None
+        ):
+            spark_fields.append(
+                sqltypes.StructField(
+                    name = tag_field, 
+                    dataType = (
+                        sqltypes.StringType() 
+                        if isinstance(tag, str)
+                        else config.integer_type
+                    ), 
+                    nullable = False,
+                )
+            )
 
-        # nullable if either:
-        # - not required (defaults mean the field may be omitted in input and become null
-        # in Spark rows)
-        # - type allows None
-        spark_fields.append(
-            sqltypes.StructField(
-                name = name, 
-                dataType = spark_type, 
-                nullable = (not required) or type_allows_none,
-            ),
-        )
+        for field in struct_type.fields:
+            spark_type, allows_none = make_spark_datatype_from_msgspec_type(
+                msgspec_type = field.type, 
+                seen = seen, 
+                config = config,
+            )
+            spark_fields.append(
+                sqltypes.StructField(
+                    name = field.encode_name, 
+                    dataType = spark_type, 
+                    nullable = (not field.required) or allows_none,
+                )
+            )
 
-    ids_seen.remove(struct_type_id)
-    return sqltypes.StructType(spark_fields)
+        return sqltypes.StructType(spark_fields)
+
+    finally:
+        seen.discard(cls)
 
 
 def make_spark_datatype_from_msgspec_type(
     msgspec_type: msginspect.Type,
-    ids_seen: set[int],
+    seen: set[type],
     config: MSGSpecToPySparkSchemaConfig = MSGSpecToPySparkSchemaConfig(),
 ) -> tuple[sqltypes.DataType, bool]:
 
@@ -205,9 +178,9 @@ def make_spark_datatype_from_msgspec_type(
     msgspec_type : msgspec.inspect.Type
         The msgspec type descriptor to convert.
 
-    ids_seen : set of int
-        A set of object ids used to detect recursive struct definitions while converting 
-        nested types.
+    seen : set of type
+        A set of record classes currently being converted, used to detect recursive 
+        definitions while converting nested types.
 
     config : MSGSpecToPySparkSchemaConfig, optional
         Configuration for type mapping and fallback behaviour. This may define default 
@@ -225,8 +198,8 @@ def make_spark_datatype_from_msgspec_type(
     Raises
     ------
     MSGSpecToPySparkTypeError
-        If a type cannot be represented in Spark, such as a general union type, an 
-        untyped tuple, or a map with nullable keys.
+        If a type cannot be represented in Spark, such as a general union type, a 
+        recursive type, a mixed-type literal or enum, or a map with nullable keys.
     MSGSpecToPySparkNotImplementedError
         If the type is unsupported and no fallback option is enabled.
 
@@ -240,26 +213,30 @@ def make_spark_datatype_from_msgspec_type(
     - mappings are converted to ``MapType`` with non-nullable keys only
     - tuples are converted to ``StructType`` with positional field names (e.g., ``_1``, 
     ``_2``)
-    - enums are represented as strings
+    - enums are represented by their values, as ``config.integer_type`` for int enums 
+    and ``StringType`` for str enums
     - literals are represented by the narrowest practical Spark type
+    - decimals always use ``config.default_decimal_precision`` and 
+    ``config.default_decimal_scale``, as msgspec does not expose either
 
     If ``config.any_to_string`` is enabled, ``Any`` is mapped to ``StringType``. 
     If ``config.nonimplemented_to_string`` is enabled, unsupported types are also 
-    mapped to ``StringType``.
+    mapped to ``StringType``. In both cases only the schema is affected; values are not
+    stringified and must already be strings when building a DataFrame.
 
     Examples
     --------
     >>> t = msginspect.type_info(int | None)
-    >>> make_spark_datatype_from_msgspec_type(t, ids_seen=set())
-    (IntegerType(), True)
+    >>> make_spark_datatype_from_msgspec_type(t, seen=set())
+    (LongType(), True)
 
     >>> t = msginspect.type_info(list[str])
-    >>> make_spark_datatype_from_msgspec_type(t, ids_seen=set())
-    (ArrayType(StringType(), containsNull=False), False)
+    >>> make_spark_datatype_from_msgspec_type(t, seen=set())
+    (ArrayType(StringType(), False), False)
     """
 
-    make_kwargs = dict(
-        ids_seen = ids_seen,
+    make_kwargs = MakeKwargs(
+        seen = seen,
         config = config,
     )
 
@@ -268,8 +245,13 @@ def make_spark_datatype_from_msgspec_type(
         **make_kwargs,
     )
 
+    if isinstance(msgspec_type, msginspect.Metadata):
+        return make_spark_datatype(
+            msgspec_type = msgspec_type.type, 
+        )
+
     # Handle Optional / Union first
-    if isinstance(msgspec_type, msginspect.UnionType):
+    elif isinstance(msgspec_type, msginspect.UnionType):
         subtypes = (
             subtype for subtype in msgspec_type.types
             if not isinstance(subtype, msginspect.NoneType)
@@ -289,7 +271,7 @@ def make_spark_datatype_from_msgspec_type(
         else:
             raise MSGSpecToPySparkTypeError(
                 "Unsupported union type for Spark schema (only T|None is supported):"
-                f" {msgspec_type!r}"
+                f" {msgspec_type}"
             )
 
 
@@ -301,16 +283,31 @@ def make_spark_datatype_from_msgspec_type(
         return config.float_type, False
 
 
-    elif (spark_datatype := MSGSPEC_TYPE_TO_SPARK_MAP.get(type(msgspec_type), None)):
+    elif isinstance(msgspec_type, msginspect.NoneType):
+        return sqltypes.NullType(), True
+
+
+    elif isinstance(msgspec_type, msginspect.DateTimeType):
+        return (
+            sqltypes.TimestampType()
+            if msgspec_type.tz
+            else sqltypes.TimestampNTZType() 
+        ), False
+
+
+    elif (
+        spark_datatype 
+        := 
+        MSGSPEC_TYPE_TO_SPARK_MAP.get(type(msgspec_type), None)
+    ) is not None:
         return spark_datatype, False
 
 
     elif isinstance(msgspec_type, msginspect.DecimalType):
-        precision = getattr(msgspec_type, "precision", config.default_decimal_precision)
-        scale = getattr(msgspec_type, "scale", config.default_decimal_scale)
+        # msgspec does not expose precision / scale, so always use the configured values.
         return sqltypes.DecimalType(
-            precision = precision, 
-            scale = scale,
+            precision = config.default_decimal_precision, 
+            scale = config.default_decimal_scale,
         ), False
 
 
@@ -334,7 +331,9 @@ def make_spark_datatype_from_msgspec_type(
             msgspec_type = key_datatype, 
         )
         if key_nullability or isinstance(key_spark_datatype, sqltypes.NullType):
-            raise MSGSpecToPySparkTypeError("Spark MapType does not support nullable/None keys.")
+            raise MSGSpecToPySparkTypeError(
+                "Spark MapType does not support nullable/None keys."
+            )
         value_spark_datatype, value_nullability = make_spark_datatype(
             msgspec_type = value_datatype, 
         )
@@ -346,11 +345,8 @@ def make_spark_datatype_from_msgspec_type(
 
 
     elif isinstance(msgspec_type, msginspect.TupleType):
-        item_types = getattr(msgspec_type, 'item_types', None)
-        # if not item_types:
-            # raise MSGSpecToPySparkTypeError(f'Untyped tuple field {msgspec_type!r}.') 
         spark_fields: list[sqltypes.StructField] = []
-        for n, element_type in enumerate(item_types, start=1):
+        for n, element_type in enumerate(msgspec_type.item_types, start = 1):
             element_spark_datatype, element_nullability = make_spark_datatype(
                 msgspec_type = element_type, 
             )
@@ -364,10 +360,11 @@ def make_spark_datatype_from_msgspec_type(
         return sqltypes.StructType(spark_fields), False
 
 
-    elif isinstance(msgspec_type, msginspect.StructType):
+    elif isinstance(msgspec_type, RECORD_TYPES):
         return make_spark_struct_from_msgspec_struct_type(
             struct_type = msgspec_type, 
-            **make_kwargs,
+            seen = seen, 
+            config = config,
         ), False
 
 
@@ -384,14 +381,28 @@ def make_spark_datatype_from_msgspec_type(
         elif value_types <= {bool}:
             return sqltypes.BooleanType(), nullable
         elif value_types <= {int}:
-            return sqltypes.IntegerType(), nullable
-        else:
+            return config.integer_type, nullable
+        elif value_types <= {float, int}:
+            return config.float_type, nullable
+        elif value_types <= {str}:
             return sqltypes.StringType(), nullable
+        else:
+            raise MSGSpecToPySparkTypeError(
+                f"Mixed-type Literal not supported: {msgspec_type.values}."
+            )
 
 
     elif isinstance(msgspec_type, msginspect.EnumType):
-        # Represent enums as strings (name/value representation is application-specific)
-        return sqltypes.StringType(), False
+        # msgspec encodes enums by value, so map on the type of the member values.
+        value_types = {type(m.value) for m in msgspec_type.cls}
+        if value_types <= {int}:
+            return config.integer_type, False
+        elif value_types <= {str}:
+            return sqltypes.StringType(), False
+        else:
+            raise MSGSpecToPySparkTypeError(
+                f"Mixed-type enum not supported: {msgspec_type.cls}."
+            )
 
 
     elif isinstance(msgspec_type, msginspect.AnyType):
@@ -404,18 +415,17 @@ def make_spark_datatype_from_msgspec_type(
         return sqltypes.StringType(), True
     
     else:
-        raise MSGSpecToPySparkNotImplementedError(f'Unsupported type: {msgspec_type!r}.')
+        raise MSGSpecToPySparkNotImplementedError(f'Unsupported type: {msgspec_type}.')
 
 
 def convert_msgspec_structs_to_pyspark_df[T: Struct](
     structs: Sequence[T],
-    schema: PySparkSchemaType | None = None,
+    schema: sqltypes.StructType | None = None,
     *,
     config: MSGSpecToPySparkSchemaConfig = MSGSpecToPySparkSchemaConfig(),
     verify_types: bool = False,
     spark_session: SparkSession | None = None,
 ) -> DataFrame:
-
 
     """
     Convert a sequence of msgspec struct instances into a PySpark DataFrame.
@@ -429,7 +439,7 @@ def convert_msgspec_structs_to_pyspark_df[T: Struct](
     structs : Sequence[T]
         A sequence of msgspec ``Struct`` instances to convert.
 
-    schema : PySparkSchemaType or None, optional
+    schema : pyspark.sql.types.StructType or None, optional
         The Spark schema to apply when constructing the DataFrame. If omitted, the schema
         is inferred from the struct type. This parameter must be provided when 
         ``structs`` is empty.
@@ -479,21 +489,20 @@ def convert_msgspec_structs_to_pyspark_df[T: Struct](
     >>> empty_df = convert_msgspec_structs_to_pyspark_df([], schema=my_schema)
     """
 
+    if not structs and schema is None:
+        raise MSGSpecToPySparkValueError(
+            'schema must be defined if no data is provided.'
+        )
 
     spark = spark_session or SparkSession.builder.getOrCreate()
 
-    if not structs:
-        if not schema:
-            raise MSGSpecToPySparkValueError(
-                'schema must be defined if no data is provided.'
-            )
-        else:
-            return spark.createDataFrame(
-                data = [],
-                schema = schema,
-            )
+    if not structs and schema:
+        return spark.createDataFrame(
+            data = [],
+            schema = schema,
+        )
 
-    if not schema:
+    elif schema is None:
         all_types = map(type, structs)
         if verify_types:
             all_types = {*all_types}

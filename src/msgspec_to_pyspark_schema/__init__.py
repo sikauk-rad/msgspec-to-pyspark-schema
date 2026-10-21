@@ -3,11 +3,12 @@ from .msgspec_to_pyspark_schema import (
     convert_msgspec_struct_type_to_pyspark_schema,
     convert_msgspec_structs_to_pyspark_df,
 )
-from .utilities import sql_normalise_string
+from .utilities import sql_normalise_string, sql_normalise_string_col
 
 __all__ = [
     "convert_msgspec_struct_type_to_pyspark_schema",
     "convert_msgspec_structs_to_pyspark_df",
     "MSGSpecToPySparkSchemaConfig",
     "sql_normalise_string",
+    "sql_normalise_string_col",
 ]

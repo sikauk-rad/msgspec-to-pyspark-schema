@@ -2,9 +2,11 @@ import datetime
 from decimal import Decimal
 from functools import partial
 import re
-from uuid import UUID
+# from uuid import UUID
 
 from msgspec import to_builtins
+from pyspark.sql import Column
+import pyspark.sql.functions as F
 
 from .constants import JSON_INCOMPATIBLE_CHARS
 
@@ -14,7 +16,7 @@ struct_to_dict = partial(
     builtin_types = [
         bytes,
         bytearray,
-        UUID,
+        # UUID,
         datetime.datetime,
         datetime.time,
         datetime.date,
@@ -49,7 +51,7 @@ def sql_normalise_string(
         ("_") and strips leading/trailing underscores. Default is True.
 
     lowercase : bool, optional
-        If True, converts the string to lowercase using `str.casefold()`.Default is True.
+        If True, converts the string to lowercase using `str.lower()`.Default is True.
 
     limit_to_255_chars : bool, optional
         If True, truncates the string to a maximum length of 255 characters. Default is 
@@ -89,7 +91,76 @@ def sql_normalise_string(
             string = string,
         ).strip('_')
     if lowercase:
-        string = string.casefold()
+        string = string.lower()
     if limit_to_255_chars:
         string = string[:255]
     return string
+
+
+def sql_normalise_string_col(
+    col: str | Column,
+    sql_normalise: bool = True,
+    lowercase: bool = True,
+    limit_to_255_chars: bool = True,
+    pattern: str | re.Pattern = JSON_INCOMPATIBLE_CHARS,
+) -> Column:
+
+    """
+    Normalise a string column for SQL compatibility and standardisation.
+
+    PySpark equivalent of `sql_normalise_string`. Transformations are applied in order:
+        1. SQL normalisation (replace incompatible chars with "_" and strip leading/
+        trailing "_")
+        2. Lowercasing
+        3. Truncation to 255 characters
+
+    Parameters
+    ----------
+    col : str or Column
+        Column name or Column expression containing the strings to normalise.
+    sql_normalise : bool, optional
+        If True, replaces characters matching `pattern` with "_" and strips leading / 
+        trailing underscores. Default is True.
+    lowercase : bool, optional
+        If True, converts the string to lowercase. Default is True.
+    limit_to_255_chars : bool, optional
+        If True, truncates the string to a maximum of 255 characters. Default is True.
+    pattern : str or re.Pattern, optional
+        Regex for incompatible characters. Defaults to `JSON_INCOMPATIBLE_CHARS`.
+
+    Returns
+    -------
+    Column
+        A Column expression with the transformations applied. Nulls stay null.
+
+    Notes
+    -----
+    - Spark evaluates `pattern` with Java regex semantics. Flags on a compiled Python 
+      `re.Pattern` are discarded; embed them inline instead (e.g., ``(?i)``).
+
+    Examples
+    --------
+    >>> df.withColumn("clean", sql_normalise_string_col("raw"))
+    >>> df.withColumn("clean", sql_normalise_string_col(F.col("raw"), lowercase=False))
+    """
+
+    c = F.col(col) if isinstance(col, str) else col
+
+    # Accept either a raw string or a compiled Python regex
+    pattern_str = pattern.pattern if isinstance(pattern, re.Pattern) else pattern
+
+    if sql_normalise:
+        # Equivalent of re.sub(pattern, "_", s)
+        c = F.regexp_replace(c, pattern_str, "_")
+        # Equivalent of .strip("_")
+        c = F.regexp_replace(c, r"^_+|_+$", "")
+
+    if lowercase:
+        # Approximation of str.casefold()
+        c = F.lower(c)
+
+    if limit_to_255_chars:
+        # Equivalent of s[:255]. Spark's substring is 1-indexed.
+        c = F.substring(c, 1, 255)
+
+    return c
