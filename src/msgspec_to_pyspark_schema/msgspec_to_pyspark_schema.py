@@ -218,6 +218,9 @@ def make_spark_datatype_from_msgspec_type(
     - literals are represented by the narrowest practical Spark type
     - decimals always use ``config.default_decimal_precision`` and 
     ``config.default_decimal_scale``, as msgspec does not expose either
+    - ``Annotated[datetime, Meta(tz = True)]`` is converted to ``TimestampType`` and
+      ``Annotated[datetime, Meta(tz = False)]`` to ``TimestampNTZType``. An unconstrained
+      ``datetime``, which may hold either, uses ``config.unconstrained_datetime_type``
 
     If ``config.any_to_string`` is enabled, ``Any`` is mapped to ``StringType``. 
     If ``config.nonimplemented_to_string`` is enabled, unsupported types are also 
@@ -288,11 +291,12 @@ def make_spark_datatype_from_msgspec_type(
 
 
     elif isinstance(msgspec_type, msginspect.DateTimeType):
-        return (
-            sqltypes.TimestampType()
-            if msgspec_type.tz
-            else sqltypes.TimestampNTZType() 
-        ), False
+        if msgspec_type.tz is True:
+            return sqltypes.TimestampType(), False
+        elif msgspec_type.tz is False:
+            return sqltypes.TimestampNTZType(), False
+        else:
+            return config.unconstrained_datetime_type, False
 
 
     elif (
